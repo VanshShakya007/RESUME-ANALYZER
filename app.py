@@ -192,6 +192,6 @@ else:
                     
                     st.markdown("### **Professional Industry Experience**")
                     st.warning(parsed_data.get('experience', 'No professional history logs returned by AI.'))
-                    
+                        
                 except Exception as e:
                     st.error(f"System Pipeline Failure. Traceback Log: {e}")
