@@ -22,12 +22,11 @@ class ResumeSchema(BaseModel):
     education: str = Field(description="Summary of college, degree parameters, metrics, or schools")
     experience: str = Field(description="Summary of work history, projects, internships, and industrial timelines")
 
-# --- 2. Robust Extraction Helper ---
+# --- 2. Advanced Extraction Helper with Traffic Failover Engine ---
 def parse_resume_flexible(uploaded_file, api_key):
     """Attempts PDF text parsing first; falls back to multimodal visual analysis if text is missing."""
     client = genai.Client(api_key=api_key)
     
-    # Try reading text layers first
     try:
         reader = PdfReader(uploaded_file)
         raw_text = ""
@@ -40,13 +39,10 @@ def parse_resume_flexible(uploaded_file, api_key):
 
     prompt = "Thoroughly analyze this resume and parse every credential parameter into the requested schema structure."
     
-    # Configure the payload based on whether text extraction worked
     if raw_text.strip():
-        # Text layer exists: Pass text corpus
         contents = f"{prompt}\n\nResume Text:\n{raw_text}"
     else:
-        # Vector/Image PDF fallback: Send raw file bytes directly to Gemini's visual engine
-        uploaded_file.seek(0) # Reset file pointer
+        uploaded_file.seek(0)
         file_bytes = uploaded_file.read()
         contents = [
             types.Part.from_bytes(
@@ -56,11 +52,17 @@ def parse_resume_flexible(uploaded_file, api_key):
             prompt
         ]
 
-    max_retries = 3
+    max_retries = 5  # Upgraded to accommodate rigorous failover loop sequences
     for attempt in range(max_retries):
         try:
+            # Dynamic failover: If Flash hits 503 multiple times, switch to Pro
+            current_model = 'gemini-2.5-flash' if attempt < 2 else 'gemini-2.5-pro'
+            
+            if attempt >= 2:
+                st.toast(f"🔄 Traffic routing failover: Pivoting execution to {current_model}...", icon="⚠️")
+
             response = client.models.generate_content(
-                model='gemini-2.5-flash',
+                model=current_model,
                 contents=contents,
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json",
@@ -72,14 +74,22 @@ def parse_resume_flexible(uploaded_file, api_key):
             
         except Exception as e:
             error_msg = str(e).upper()
+            
+            # Catch 503, Unavailable, and Temporary Server Spikes
             if "503" in error_msg or "UNAVAILABLE" in error_msg:
                 if attempt < max_retries - 1:
-                    time.sleep(2)
+                    # Exponential Backoff Calculation
+                    wait_time = 1.5 * (2 ** attempt)
+                    st.warning(f"Google Server Busy (503). Retrying in {wait_time:.1f}s... (Attempt {attempt + 1}/{max_retries})")
+                    time.sleep(wait_time)
                     continue
+            
             elif "429" in error_msg or "RESOURCE_EXHAUSTED" in error_msg:
                 if attempt < max_retries - 1:
-                    time.sleep(22)
+                    st.warning("Quota bottleneck hit (429). Resetting stream pipeline buffers in 15 seconds...")
+                    time.sleep(15)
                     continue
+            
             raise e
 
 # --- 3. UI Layout Configuration ---
